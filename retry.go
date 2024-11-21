@@ -26,6 +26,11 @@ func (o Operation) withEmptyData() OperationWithData[struct{}] {
 // the notify function isn't called.
 type Notify func(error, time.Duration)
 
+type OperationResult struct {
+	res T
+	err error
+}
+
 // Retry the operation o until it does not return error or BackOff stops.
 // o is guaranteed to be run at least once.
 //
@@ -85,18 +90,14 @@ func doRetryNotify[T any](operation OperationWithData[T], b BackOff, notify Noti
 
 	b.Reset()
 
-	type result struct {
-		res T
-		err error
-	}
 	
 	for {
-		outCh := make(chan result)
+		outCh := make(chan OperationResult)
 		
 		// Launch the operation asynchronously
 		go func() {
 			res, err := operation()
-			outCh <- result{res, err}
+			outCh <- OperationResult{res, err}
 		}()
 
 		// Then wait for a) overall timeout, b) error, c) result
