@@ -69,7 +69,6 @@ func RetryNotifyWithTimerAndData[T any](operation OperationWithData[T], b BackOf
 
 func doRetryNotify[T any](operation OperationWithData[T], b BackOff, notify Notify, t Timer) (T, error) {
 	var (
-		err  error
 		next time.Duration
 		res  T
 	)
@@ -85,36 +84,56 @@ func doRetryNotify[T any](operation OperationWithData[T], b BackOff, notify Noti
 
 	b.Reset()
 	for {
-		res, err = operation()
-		if err == nil {
-			return res, nil
-		}
+		errCh := make(chan error)
+		resCh := make(chan T)
 
-		var permanent *PermanentError
-		if errors.As(err, &permanent) {
-			return res, permanent.Err
-		}
-
-		if next = b.NextBackOff(); next == Stop {
-			if cerr := ctx.Err(); cerr != nil {
-				return res, cerr
+		// Launch the operation asynchronously
+		go func() {
+			res, err := operation()
+			if err != nil {
+				errCh <- err
+				return
 			}
+			resCh <- res
+		}()
 
-			return res, err
-		}
-
-		if notify != nil {
-			notify(err, next)
-		}
-
-		t.Start(next)
-
+		// Then wait for a) overall timeout, b) error, c) result
 		select {
 		case <-ctx.Done():
 			return res, ctx.Err()
-		case <-t.C():
+		case err := <-errCh:
+			var permanent *PermanentError
+			if errors.As(err, &permanent) {
+				return res, permanent.Err
+			}
+
+			if next = b.NextBackOff(); next == Stop {
+				if cerr := ctx.Err(); cerr != nil {
+					return res, cerr
+				}
+
+				return res, err
+			}
+
+			if notify != nil {
+				notify(err, next)
+			}
+
+			// Start a timer to delay before the next try
+			t.Start(next)
+
+			// But exit, if our overall context times out while waiting for the next attempt
+			select {
+			case <-ctx.Done():
+				return res, ctx.Err()
+			case <-t.C():
+			}
+			
+		case res = <-resCh:
+			return res, nil
 		}
 	}
+
 }
 
 // PermanentError signals that the operation should not be retried.
