@@ -69,6 +69,7 @@ func RetryNotifyWithTimerAndData[T any](operation OperationWithData[T], b BackOf
 
 func doRetryNotify[T any](operation OperationWithData[T], b BackOff, notify Notify, t Timer) (T, error) {
 	var (
+		err  error
 		next time.Duration
 		res  T
 	)
@@ -83,25 +84,33 @@ func doRetryNotify[T any](operation OperationWithData[T], b BackOff, notify Noti
 	ctx := getContext(b)
 
 	b.Reset()
-	for {
-		errCh := make(chan error)
-		resCh := make(chan T)
 
+	type result struct {
+		res T
+		err error
+	}
+	
+	for {
+		outCh := make(chan result)
+		
 		// Launch the operation asynchronously
 		go func() {
 			res, err := operation()
-			if err != nil {
-				errCh <- err
-				return
-			}
-			resCh <- res
+			outCh <- result{res, err}
 		}()
 
 		// Then wait for a) overall timeout, b) error, c) result
 		select {
 		case <-ctx.Done():
 			return res, ctx.Err()
-		case err := <-errCh:
+		case out := <-outCh:
+			res = out.res
+			err = out.err
+
+			if err == nil {
+				return res, nil
+			}
+			
 			var permanent *PermanentError
 			if errors.As(err, &permanent) {
 				return res, permanent.Err
@@ -128,12 +137,8 @@ func doRetryNotify[T any](operation OperationWithData[T], b BackOff, notify Noti
 				return res, ctx.Err()
 			case <-t.C():
 			}
-			
-		case res = <-resCh:
-			return res, nil
 		}
 	}
-
 }
 
 // PermanentError signals that the operation should not be retried.
