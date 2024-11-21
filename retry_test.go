@@ -55,6 +55,26 @@ func TestRetry(t *testing.T) {
 	}
 }
 
+func TestRetryHangs(t *testing.T) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	f := func() error {
+		log.Printf("Test Hang")
+		time.Sleep(10 * time.Second)
+		return nil
+	}
+
+	err := RetryNotifyWithTimer(f, WithContext(NewConstantBackOff(time.Millisecond), ctx), nil, &testTimer{})
+	if err == nil {
+		t.Errorf("error is unexpectedly nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("unexpected error: %s", err.Error())
+	}
+}
+
 func TestRetryWithData(t *testing.T) {
 	const successOn = 3
 	var i = 0
